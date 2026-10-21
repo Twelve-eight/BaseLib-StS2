@@ -53,6 +53,7 @@ public abstract partial class ModConfig
     public void ConfigReloaded() => OnConfigReloaded?.Invoke();
 
     private readonly string _path;
+    private readonly string? _legacyPath;
     public string ModPrefix { get; private set; }
     [ConfigIgnore] public string? ModId { get; set; } // Injected by ModConfigRegistry
 
@@ -99,32 +100,80 @@ public abstract partial class ModConfig
     {
         ModPrefix = GetType().GetPrefix();
         ModId = null;
-        var rootNamespace = GetType().GetRootNamespace();
 
-        if (string.IsNullOrEmpty(rootNamespace) && string.IsNullOrEmpty(filename))
+        var configType = GetType();
+        var assemblyName = configType.Assembly.GetName().Name;
+        var defaultFilename = BuildDefaultFilename(assemblyName, configType.Namespace);
+        _modConfigName = defaultFilename;
+
+        if (string.IsNullOrEmpty(defaultFilename) && string.IsNullOrEmpty(filename))
         {
             var message = "Cannot determine a safe configuration file path for " +
-                          $"{_modConfigName} (assembly {GetType().Assembly.GetName().Name}). " +
+                          $"{configType.FullName} (assembly {assemblyName}). " +
                           "You must either place your configuration class inside a namespace, " +
                           "or explicitly provide a filename in the constructor.";
             ModConfigLogger.Error(message); // Shows it in the GUI when opening ANY mod config menu
             throw new InvalidOperationException(message);
         }
 
-        var defaultFilename = SpecialCharRegex().Replace(rootNamespace, "");
-        _modConfigName = defaultFilename;
+        string configFilename;
+        if (filename == null)
+        {
+            // The default name itself contains dots (namespace separators), so Path.HasExtension cannot detect a
+            // missing extension here; always append the config extension.
+            configFilename = defaultFilename + ".cfg";
+        }
+        else
+        {
+            configFilename = SpecialCharRegex().Replace(filename, "");
+            // "HasExtension", not "Contains('.')": a dotted name such as "MyMod.Config" is not an extension.
+            if (!Path.HasExtension(configFilename)) configFilename += ".cfg";
+        }
 
-        filename = filename == null ? defaultFilename : SpecialCharRegex().Replace(filename, "");
-        if (!filename.Contains('.')) filename += ".cfg";
-
-        _path = Path.Combine(OS.GetUserDataDir(), "mod_configs", filename);
+        _path = Path.Combine(OS.GetUserDataDir(), "mod_configs", configFilename);
+        // Older BaseLib versions named the default file after the root namespace only ("<root>.cfg"), so two
+        // configs of the same mod shared one file and overwrote each other. Read that file once if the new one
+        // does not exist yet; it is never written again and stays on disk as a backup.
+        _legacyPath = filename == null ? GetLegacyConfigPath(configType, configFilename) : null;
 
         CheckConfigProperties();
         Init();
     }
 
+    /// <summary>
+    /// Builds the default config file name from the assembly and the full namespace, so that different mods (and
+    /// different namespaces within one mod) never share a file. The regex keeps dots but strips path separators and
+    /// any other character that is not safe in a file name.
+    /// </summary>
+    private static string BuildDefaultFilename(string? assemblyName, string? fullNamespace)
+    {
+        var safeAssemblyName = SpecialCharRegex().Replace(assemblyName ?? "", "");
+        var safeNamespace = SpecialCharRegex().Replace(fullNamespace ?? "", "");
+
+        if (string.IsNullOrEmpty(safeNamespace)) return safeAssemblyName;
+        return string.IsNullOrEmpty(safeAssemblyName) ? safeNamespace : $"{safeAssemblyName}.{safeNamespace}";
+    }
+
+    /// <summary>
+    /// Returns the path this config used before the default name included the assembly name, or null when that name
+    /// is identical to <paramref name="newFilename"/>.
+    /// </summary>
+    private static string? GetLegacyConfigPath(Type configType, string newFilename)
+    {
+        var legacyFilename = SpecialCharRegex().Replace(configType.GetRootNamespace(), "") + ".cfg";
+        if (string.Equals(legacyFilename, newFilename, StringComparison.OrdinalIgnoreCase)) return null;
+
+        return Path.Combine(OS.GetUserDataDir(), "mod_configs", legacyFilename);
+    }
+
     public bool HasSettings() => ConfigProperties.Count > 0;
     public bool HasVisibleSettings() => _hasVisibleSettings;
+
+    /// <summary>
+    /// Absolute path of the file backing this config. Two configs that share a path overwrite each other's settings;
+    /// <see cref="ModConfigRegistry.Register"/> logs such collisions.
+    /// </summary>
+    internal string ConfigPath => _path;
 
     /// <summary>
     /// If true, this ModConfig will show up in the mod list. By default, a mod is shown if it has any visible setting
@@ -199,8 +248,23 @@ public abstract partial class ModConfig
             _defaultValues.TryAdd(property.Name, property.GetValue(null));
         }
 
-        if (File.Exists(_path)) Load();
-        else Save(); // Save default values
+        if (File.Exists(_path))
+        {
+            Load();
+        }
+        else if (_legacyPath is { } legacyPath && File.Exists(legacyPath))
+        {
+            BaseLibMain.Logger.Info(
+                $"Migrating config for {_modConfigName} from legacy file {legacyPath} to {_path}. " +
+                "The legacy file is no longer written and is kept as a backup.");
+            // Persist the migrated values right away, so the migration only happens once. LoadInternal already
+            // re-saves by itself when the file had missing or invalid values.
+            if (LoadFrom(legacyPath) && !File.Exists(_path)) Save();
+        }
+        else
+        {
+            Save(); // Save default values
+        }
     }
 
     public void Changed()
@@ -307,17 +371,28 @@ public abstract partial class ModConfig
     {
         Dictionary<string, string> values = [];
 
-        // Convert all the values
-        try
+        // Convert all the values. A single property that cannot be converted (no TypeConverter, throwing getter,
+        // a property hidden with 'new', ...) must not stop the remaining settings from being written: the config
+        // would silently never hit the disk again.
+        foreach (var property in ConfigProperties)
         {
-            foreach (var property in ConfigProperties)
+            try
             {
                 var value = property.GetValue(null);
                 var converter = TypeDescriptor.GetConverter(property.PropertyType);
                 var stringValue = converter.ConvertToInvariantString(value);
 
                 if (stringValue != null)
-                    values.Add(property.Name, stringValue);
+                {
+                    if (!values.TryAdd(property.Name, stringValue))
+                    {
+                        // A derived class hid a config property with 'new'; only the first value encountered is
+                        // saved (property enumeration order is unspecified).
+                        ModConfigLogger.Warn(
+                            $"{_modConfigName} has more than one config property named {property.Name}; " +
+                            "only one value is saved. Rename the hidden property or mark it [ConfigIgnore].");
+                    }
+                }
                 else
                 {
                     ModConfigLogger.Warn(
@@ -325,12 +400,12 @@ public abstract partial class ModConfig
                         "it will be omitted.");
                 }
             }
-        }
-        catch (Exception)
-        {
-            // During testing, I have never seen an exception here, but let's avoid a game crash/menu hang, etc.
-            ModConfigLogger.Error($"Failed to save config {_modConfigName}: unknown error during conversion.", false);
-            return;
+            catch (Exception e)
+            {
+                ModConfigLogger.Warn(
+                    $"Failed to convert {_modConfigName} property {property.Name} to string for saving; " +
+                    $"it will be omitted. Error: {e.Message}");
+            }
         }
 
         // Serialize to JSON and write to the config file
@@ -364,15 +439,25 @@ public abstract partial class ModConfig
 
     public void Load()
     {
+        LoadFrom(_path);
+    }
+
+    /// <summary>
+    /// Loads the config file at <paramref name="filePath"/> into the properties. Returns false when the file could
+    /// not be read at all (lock timeout, missing file, unexpected I/O error); empty or corrupt files are handled as
+    /// soft errors and reported through <see cref="ModConfigLogger"/>.
+    /// </summary>
+    private bool LoadFrom(string filePath)
+    {
         if (!_configFileLock.Wait(TimeSpan.FromSeconds(3)))
         {
             BaseLibMain.Logger.Warn($"Timed out waiting to load config {_modConfigName}.");
-            return;
+            return false;
         }
 
         try
         {
-            LoadInternal();
+            return LoadInternal(filePath);
         }
         finally
         {
@@ -380,12 +465,12 @@ public abstract partial class ModConfig
         }
     }
 
-    private void LoadInternal()
+    private bool LoadInternal(string filePath)
     {
-        if (!File.Exists(_path))
+        if (!File.Exists(filePath))
         {
-            ModConfigLogger.Error($"Load for {_modConfigName} failed. File not found: {_path}");
-            return;
+            ModConfigLogger.Error($"Load for {_modConfigName} failed. File not found: {filePath}");
+            return false;
         }
 
         // Missing fields or bad values (will overwrite the config if true)
@@ -394,7 +479,7 @@ public abstract partial class ModConfig
         try
         {
             Dictionary<string, string>? values;
-            using (var fileStream = File.OpenRead(_path))
+            using (var fileStream = File.OpenRead(filePath))
             {
                 values = JsonSerializer.Deserialize<Dictionary<string, string>>(fileStream);
             }
@@ -425,7 +510,7 @@ public abstract partial class ModConfig
         }
         catch (JsonException)
         {
-            var fileInfo = new FileInfo(_path);
+            var fileInfo = new FileInfo(filePath);
 
             if (!fileInfo.Exists || fileInfo.Length == 0)
             {
@@ -433,10 +518,10 @@ public abstract partial class ModConfig
             }
             else
             {
-                var brokenPath = _path + ".broken";
+                var brokenPath = filePath + ".broken";
                 try
                 {
-                    File.Move(_path, brokenPath, overwrite: true);
+                    File.Move(filePath, brokenPath, overwrite: true);
                 }
                 catch { /* ignore */ }
 
@@ -451,14 +536,15 @@ public abstract partial class ModConfig
         catch (Exception e)
         {
             ModConfigLogger.Error($"Unexpected error loading config {_modConfigName}: {e.Message}");
-            return;
+            return false;
         }
 
-        if (!hasSoftErrors) return;
+        if (!hasSoftErrors) return true;
 
-        // If we got here via Load() we hold _configFileLock, so we can't call Save() here, or it will deadlock
+        // If we got here via Load()/LoadFrom() we hold _configFileLock, so we can't call Save() here, or it will deadlock
         ModConfigLogger.Warn($"Saving fresh config for {_modConfigName} to correct soft errors (missing fields, invalid fields).");
         SaveInternal();
+        return true;
     }
 
     // Convert a single value and update the property. Return true on success, false on failure.

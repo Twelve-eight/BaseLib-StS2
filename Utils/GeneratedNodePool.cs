@@ -101,9 +101,8 @@ public class GeneratedNodePool<T> : INodePool where T : Node, IPoolable
             else
             {
                 Log.Error($"Tried to free object {obj} ({obj.GetType()}) back to pool {typeof(GeneratedNodePool<T>)} but it's not part of the pool!");
+                obj.QueueFreeSafelyNoPool();
             }
-
-            obj.QueueFreeSafelyNoPool();
         }
         else
         {
@@ -150,7 +149,7 @@ public class GeneratedNodePool<T> : INodePool where T : Node, IPoolable
     private void DisconnectSignal(Callable callable, Signal signal)
     {
         GodotObject? target = callable.Target;
-        if (target == null && callable.Method == null)
+        if ((target == null && callable.Method == null) || (target != null && !GodotObject.IsInstanceValid(target)))
         {
             return;
         }
@@ -160,6 +159,8 @@ public class GeneratedNodePool<T> : INodePool where T : Node, IPoolable
         if (node != null && !node.IsInsideTree()) return;
         
         var owner = signal.Owner;
+        if (owner == null || !GodotObject.IsInstanceValid(owner)) return;
+
         var node2 = owner as Node;
         if (node != null && node.HasSignal(name) && node.IsConnected(name, callable))
         {

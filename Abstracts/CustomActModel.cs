@@ -80,7 +80,12 @@ public abstract class CustomActModel : ActModel, ICustomModel, ISceneConversions
     /// or have a non-basegame act number, override this. If making custom ancients for your specific act,
     /// add them to the act using their IsValidForAct method, rather than by adding them to this method.
     /// </summary>
-    /// <exception cref="Exception"></exception>
+    /// <remarks>
+    /// Acts whose <see cref="Index"/> is not 0, 1 or 2 (for example <c>actNumber: -1</c>, used for acts that should not
+    /// spawn naturally) get an empty set and a single warning instead of an exception: this property is enumerated for
+    /// every act by the relic collection, run history and end-of-run progress screens, where throwing would break the
+    /// whole screen.
+    /// </remarks>
     public override IEnumerable<AncientEventModel> AllAncients
     {
         get
@@ -90,9 +95,24 @@ public abstract class CustomActModel : ActModel, ICustomModel, ISceneConversions
                 0 => Act1Ancients,
                 1 => Act2Ancients,
                 2 => Act3Ancients,
-                _ => throw new Exception("Override AllAncients for acts with a non-basegame act number.")
+                _ => NoAncientsForNonBasegameAct()
             };
         }
+    }
+
+    private bool _warnedNoAncientsForNonBasegameAct;
+
+    private IEnumerable<AncientEventModel> NoAncientsForNonBasegameAct()
+    {
+        if (!_warnedNoAncientsForNonBasegameAct)
+        {
+            _warnedNoAncientsForNonBasegameAct = true;
+            BaseLibMain.Logger.Warn(
+                $"{GetType().Name} has Index {Index}, which has no basegame Ancient preset; override AllAncients " +
+                "to provide the Ancients for this act. Returning an empty set.");
+        }
+
+        return [];
     }
 
     /// <summary>
@@ -277,10 +297,14 @@ public abstract class CustomActModel : ActModel, ICustomModel, ISceneConversions
     [HarmonyPatch(typeof(NTreasureRoom), nameof(NTreasureRoom._Ready))]
     public static class CustomActTreasureChest
     {
-        // Use reflection for treasure-room fields to tolerate type changes and avoid direct field access across the Android Mono/Godot bridge.
+        // Use reflection for the run state to tolerate type changes and avoid direct field access across the Android Mono/Godot bridge.
         private static readonly FieldInfo? RunState = typeof(NTreasureRoom).Field("_runState");
-        private static readonly FieldInfo? ChestNode = typeof(NTreasureRoom).Field("_chestNode");
-        private static readonly FieldInfo? ChestButton = typeof(NTreasureRoom).Field("_chestButton");
+
+        // Names taken from the vanilla scene: NTreasureRoom._Ready resolves "%Chest" (NTreasureRoom.cs:225) and
+        // NTreasureButton._Ready resolves "%ChestVisual" (NTreasureButton.cs:79). Both lookups are repeated here with
+        // the public node API instead of reflecting private fields, because the chest node now lives on the button.
+        private const string ChestButtonPath = "%Chest";
+        private const string ChestVisualName = "ChestVisual";
 
         [HarmonyPostfix]
         public static void InsertCustomChestVisualNode(NTreasureRoom __instance)
@@ -289,28 +313,76 @@ public abstract class CustomActModel : ActModel, ICustomModel, ISceneConversions
             IRunState? runState = RunState?.GetValue(__instance) as IRunState;
             if (runState?.Act is not CustomActModel customActModel) return;
             if (customActModel.CustomChestScene is null) return;
-            Node2D? chestNode = ChestNode?.GetValue(__instance) as Node2D;
-            NButton? chestButton = ChestButton?.GetValue(__instance) as NButton; // The field may be NTreasureButton, which inherits NButton.
-            if (chestNode is null || chestButton is null) // should in theory never be the case
+
+            NButton? chestButton = __instance.GetNodeOrNull<NButton>(ChestButtonPath);
+            if (chestButton is null)
             {
-                BaseLibMain.Logger.Warn("References not found. Using normal Chest Visuals instead");
+                BaseLibMain.Logger.Error(
+                    $"Could not find the treasure room's chest button ({ChestButtonPath}), so the custom chest scene " +
+                    $"cannot be inserted. Using normal chest visuals instead. Scene path: {customActModel.CustomChestScene}");
+                return;
+            }
+
+            // NTreasureButton owns the chest visual and fills its own _chestNode from "%ChestVisual" in _Ready, which runs
+            // before NTreasureRoom._Ready (children are ready first). The unique name is used first; FindChild covers the
+            // case where the unique name is not registered in the button's owner scope.
+            Node2D? chestNode = chestButton.GetNodeOrNull<Node2D>("%" + ChestVisualName)
+                                ?? chestButton.FindChild(ChestVisualName, recursive: true, owned: false) as Node2D;
+            if (chestNode is null)
+            {
+                BaseLibMain.Logger.Error(
+                    $"Could not find the chest visual node ({ChestVisualName}) inside the treasure room's chest button, " +
+                    $"so the custom chest scene cannot replace it. Using normal chest visuals instead. " +
+                    $"Scene path: {customActModel.CustomChestScene}");
                 return;
             }
 
             // node insertion
-            chestNode.Visible =
-                false; // Not removed so the game can still access the node whenever it wants, to prevent errors/crashing.
-            Node parent = chestNode.GetParent();
-            NCustomTreasureRoomChest? customTreasureRoom =
-                NCustomTreasureRoomChest.Create(__instance, runState, chestButton, customActModel.CustomChestScene);
-            if (customTreasureRoom is null)
+            Node? parent = chestNode.GetParent();
+            if (parent is null)
             {
+                // Nothing to attach to, so leave the vanilla chest untouched.
                 BaseLibMain.Logger.Error(
-                    $"Tried to instantiate custom treasure chest node but failed. Scene path: {customActModel.CustomChestScene}");
+                    $"Vanilla chest node has no parent, cannot insert custom chest node. Scene path: {customActModel.CustomChestScene}");
                 return;
             }
 
-            parent.AddChildSafely(customTreasureRoom);
+            // Not removed so the game can still access the node whenever it wants, to prevent errors/crashing.
+            // Hidden only while the replacement is being inserted: the instantiated scene can throw (missing path,
+            // wrong root type), and hiding it before a failure is handled would leave the room without any chest.
+            bool vanillaWasVisible = chestNode.Visible;
+            chestNode.Visible = false;
+            NCustomTreasureRoomChest? customTreasureRoom = null;
+            try
+            {
+                customTreasureRoom = NCustomTreasureRoomChest.Create(__instance, runState, chestButton,
+                    customActModel.CustomChestScene);
+                if (customTreasureRoom is null)
+                {
+                    // Create currently throws instead of returning null when instantiation fails; kept as a guard in
+                    // case its contract changes.
+                    chestNode.Visible = vanillaWasVisible;
+                    BaseLibMain.Logger.Error(
+                        $"Tried to instantiate custom treasure chest node but failed. Scene path: {customActModel.CustomChestScene}");
+                    return;
+                }
+
+                parent.AddChildSafely(customTreasureRoom);
+            }
+            catch (Exception e)
+            {
+                chestNode.Visible = vanillaWasVisible;
+                if (customTreasureRoom is not null && GodotObject.IsInstanceValid(customTreasureRoom) &&
+                    customTreasureRoom.GetParent() is null)
+                {
+                    // It never entered the tree, where QueueFree would not delete it.
+                    customTreasureRoom.Free();
+                }
+
+                BaseLibMain.Logger.Error(
+                    $"Failed to instantiate custom treasure chest node, using the normal chest visuals instead. " +
+                    $"Scene path: {customActModel.CustomChestScene}\n{e}");
+            }
         }
     }
 

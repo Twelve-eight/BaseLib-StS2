@@ -12,6 +12,13 @@ static class SavedSpireFieldPatch
 {
     private static readonly List<ISavedSpireField> RegisteredFields = [];
 
+    /// <summary>
+    /// True once every mod has been loaded, i.e. once <see cref="AddFieldsSorted"/> has run. A field created before
+    /// that cannot be matched to its mod yet: a mod is only added to the loaded mod list after its initializer, which
+    /// is after any field it creates.
+    /// </summary>
+    internal static bool ModsLoaded { get; private set; }
+
     public static void Register<TKey, TVal>(SavedSpireField<TKey, TVal> field)
         where TKey : class => RegisteredFields.Add(field);
 
@@ -23,15 +30,27 @@ static class SavedSpireFieldPatch
     static void PostfixFromInternal(ref SavedProperties? __result, object model)
     {
         var props = __result ?? new SavedProperties();
-        bool added = false;
         foreach (var field in GetFieldsForModel(model))
-        {
             field.Export(model, props);
-            added = true;
-        }
-        if (__result == null && added)
+
+        // FromInternal returns null when nothing was saved, and callers rely on that. Only attach a holder that we
+        // created when our fields actually wrote something; an empty holder would read as "properties exist".
+        if (__result == null && HasAnyValue(props))
             __result = props;
     }
+
+    /// <summary>
+    /// Mirrors the empty check that <see cref="SavedProperties.FromInternal"/> applies before returning null.
+    /// The base game method is private, so it cannot be reused directly.
+    /// </summary>
+    private static bool HasAnyValue(SavedProperties props) =>
+        props.ints is { Count: > 0 } ||
+        props.bools is { Count: > 0 } ||
+        props.strings is { Count: > 0 } ||
+        props.intArrays is { Count: > 0 } ||
+        props.modelIds is { Count: > 0 } ||
+        props.cards is { Count: > 0 } ||
+        props.cardArrays is { Count: > 0 };
 
     [HarmonyPatch(nameof(SavedProperties.FillInternal))]
     [HarmonyPostfix]
@@ -44,6 +63,11 @@ static class SavedSpireFieldPatch
     internal static void AddFieldsSorted()
     {
         BaseLibMain.Logger.Info($"Found {RegisteredFields.Count} SavedSpireFields.");
+
+        // Every mod has been loaded by this point. From here on a field that cannot be matched to a mod is reported
+        // instead of being treated as "its mod has not been registered yet".
+        ModsLoaded = true;
+
         RegisteredFields.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.Ordinal));
 
         foreach (var field in RegisteredFields)
@@ -51,6 +75,12 @@ static class SavedSpireFieldPatch
             if (field.IsBasegameSupported)
             {
                 InjectNameIntoBaseGameCache(field.Name);
+
+                // The pre-namespacing key is written next to the namespaced one (see SavedSpireField.Export), so it
+                // needs a net ID too. It is expected to be shared with mods that had the same field name before
+                // namespacing, so a duplicate is not an error.
+                if (!string.Equals(field.Name, field.LegacyName, StringComparison.Ordinal))
+                    InjectNameIntoBaseGameCache(field.LegacyName, mustBeUnique: false);
             }
             else if (!field.RegisterCustomSave())
             {
@@ -64,7 +94,7 @@ static class SavedSpireFieldPatch
     /// </summary>
     private static Type? _targetType;
     private static bool _beta = false;
-    private static void InjectNameIntoBaseGameCache(string name)
+    private static void InjectNameIntoBaseGameCache(string name, bool mustBeUnique = true)
     {
         if (_targetType == null)
         {
@@ -94,9 +124,13 @@ static class SavedSpireFieldPatch
 
             bitSizeProperty.Invoke(null, [newBitSize]);
         }
-        else
+        else if (mustBeUnique)
         {
             BaseLibMain.Logger.Error($"SavedSpireField name is not unique: {name}");
+        }
+        else
+        {
+            BaseLibMain.Logger.Debug($"Saved property name already registered, reusing it for a legacy key: {name}");
         }
     }
 }

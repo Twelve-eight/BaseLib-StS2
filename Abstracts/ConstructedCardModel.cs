@@ -176,7 +176,7 @@ public abstract class ConstructedCardModel(
         if (_hasBasegameCalculatedVar)
             throw new Exception("CardModel only supports a single normal calculated var; " +
                                 "use WithCalculatedBlock while providing a custom name to use" +
-                                "CustomCalculatedBlockVar instead");
+                                " CustomCalculatedBlockVar instead");
         _hasBasegameCalculatedVar = true;
         SetupCalculatedVar(new CalculatedBlockVar(props), baseVal, 1, bonus, upgrade, bonusUpgrade);
         return this;
@@ -191,7 +191,7 @@ public abstract class ConstructedCardModel(
         if (_hasBasegameCalculatedVar)
             throw new Exception("CardModel only supports a single normal calculated var; " +
                                 "use WithCalculatedBlock while providing a custom name to use" +
-                                "CustomCalculatedBlockVar instead");
+                                " CustomCalculatedBlockVar instead");
         _hasBasegameCalculatedVar = true;
         SetupCalculatedVar(new CalculatedBlockVar(props), baseVal, multVal, mult, upgrade, bonusUpgrade);
         return this;
@@ -226,7 +226,7 @@ public abstract class ConstructedCardModel(
         if (_hasBasegameCalculatedVar)
             throw new Exception("CardModel only supports a single normal calculated var; " +
                                 "use WithCalculatedDamage while providing a custom name to use" +
-                                "CustomCalculatedBlockVar instead");
+                                " CustomCalculatedDamageVar instead");
         _hasBasegameCalculatedVar = true;
         SetupCalculatedVar(new CalculatedDamageVar(props), baseVal, 1, bonus, upgrade, bonusUpgrade);
         return this;
@@ -241,7 +241,7 @@ public abstract class ConstructedCardModel(
         if (_hasBasegameCalculatedVar)
             throw new Exception("CardModel only supports a single normal calculated var; " +
                                 "use WithCalculatedDamage while providing a custom name to use" +
-                                "CustomCalculatedDamageVar instead");
+                                " CustomCalculatedDamageVar instead");
         _hasBasegameCalculatedVar = true;
         SetupCalculatedVar(new CalculatedDamageVar(props), baseVal, multVal, mult, upgrade, bonusUpgrade);
         return this;
@@ -262,11 +262,9 @@ public abstract class ConstructedCardModel(
     protected ConstructedCardModel WithCalculatedDamage(string name, int baseVal, int multVal,
         Func<CardModel, Creature?, decimal> mult, ValueProp props = ValueProp.Move, int upgrade = 0, int bonusUpgrade = 0)
     {
-        if (_hasBasegameCalculatedVar)
-            throw new Exception("CardModel only supports a single normal calculated var; " +
-                                "use WithCalculatedDamage while providing a custom name to use" +
-                                "CustomCalculatedDamageVar instead");
-        _hasBasegameCalculatedVar = true;
+        // CustomCalculatedDamageVar renames itself away from the basegame "CalculatedDamage" key
+        // (it uses {Name}Base/{Name}Extra), so it may coexist with one basegame calculated var.
+        // Duplicate custom names are still rejected by the engine's DynamicVarSet constructor.
         SetupCalculatedVar(new CustomCalculatedDamageVar(name, props), baseVal, multVal, mult, upgrade, bonusUpgrade);
         return this;
     }

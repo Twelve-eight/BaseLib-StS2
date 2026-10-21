@@ -20,13 +20,15 @@ internal class NEnergyCounterFactory : NodeFactory<NEnergyCounter>
     private static readonly StringName ShadowOffsetY = "shadow_offset_y";
     private static readonly StringName ShadowOutlineSize = "shadow_outline_size";
     
+    //%StarAnchor is deliberately not listed: it is a BaseLib-only extension node, not something the engine reads,
+    //and the star counter patch opts into it with GetNodeOrNull. Generating an empty anchor here would silently
+    //move the star counter of every custom energy counter that does not provide one.
     public NEnergyCounterFactory() : base([
         new NodeInfo<NParticlesContainer>("%EnergyVfxBack"),
         new NodeInfo<Control>("%Layers"),
         new NodeInfo<Control>("%RotationLayers"),
         new NodeInfo<NParticlesContainer>("%EnergyVfxFront"),
-        new NodeInfo<MegaLabel>("Label"),
-        new NodeInfo<NParticlesContainer>("%StarAnchor") //Custom
+        new NodeInfo<MegaLabel>("Label")
     ])
     { }
 
@@ -72,9 +74,32 @@ internal class NEnergyCounterFactory : NodeFactory<NEnergyCounter>
                 var label = CreateDefaultLabel();
                 target.AddChild(label);
                 break;
+            case "%Layers":
+                //NEnergyCounter._Ready reads %Layers unconditionally, so a counter without it fails with
+                //NodeNotFoundException before the scene is ever shown.
+                var layers = CreateFullRectControl(null);
+                target.AddUnique(layers, "Layers");
+                break;
             case "%RotationLayers":
-                var control = CreateFullRectControl(null);
-                target.AddUnique(control, "RotationLayers");
+                var rotationLayers = CreateFullRectControl(null);
+                var parentLayers = target.GetNodeOrNull<Control>("%Layers");
+                if (parentLayers != null && parentLayers.GetNodeOrNull("RotationLayers") == null)
+                {
+                    //Mirror the structure built by FromLegacy: rotating layers live under %Layers, so the material
+                    //pass and the modulate applied to _layers also cover them. The unique name has to be owned by
+                    //the converted scene root, not by %Layers, or NEnergyCounter's GetNode("%RotationLayers") cannot
+                    //resolve it.
+                    rotationLayers.Name = "RotationLayers";
+                    rotationLayers.UniqueNameInOwner = true;
+                    parentLayers.AddChild(rotationLayers);
+                    rotationLayers.Owner = target;
+                }
+                else
+                {
+                    //Either %Layers is missing, or it already owns a RotationLayers child (a counter built by
+                    //FromLegacy). Keep the flat layout in that case instead of creating a duplicate name.
+                    target.AddUnique(rotationLayers, "RotationLayers");
+                }
                 break;
             case "%EnergyVfxBack":
                 var backVfx = CreateParticlesContainer(null, "EnergyVfxBack");
@@ -84,6 +109,10 @@ internal class NEnergyCounterFactory : NodeFactory<NEnergyCounter>
                 var frontVfx = CreateParticlesContainer(null, "EnergyVfxFront");
                 target.AddUnique(frontVfx);
                 break;
+            default:
+                throw new InvalidOperationException(
+                    $"Node factory for {typeof(NEnergyCounter).Name} does not support generating required node '{required.Path}' ({required.NodeType().Name}). " +
+                    "Provide the node in the scene, add a GenerateNode branch, or remove it from NamedNodes.");
         }
     }
 
