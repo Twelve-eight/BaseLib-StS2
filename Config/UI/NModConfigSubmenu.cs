@@ -359,8 +359,13 @@ public partial class NModConfigSubmenu : NSubmenu
         var fallbackTitle = config.GetType().GetRootNamespace();
         if (string.IsNullOrWhiteSpace(fallbackTitle))
             fallbackTitle = config.GetType().Assembly.GetName().Name;
+        // BaseLib ships settings_ui.json for deu/eng/jpn/rus/zhs only, so a language without that
+        // table (ita/kor today) reaches this line with GetIfExists returning null when the game does
+        // not fall back to eng. A missing name must not take down the whole screen, so use the same
+        // literal-fallback shape as ModConfigPatch.
         if (string.IsNullOrWhiteSpace(fallbackTitle))
-            fallbackTitle = LocString.GetIfExists("settings_ui", "BASELIB-UNKNOWN_MOD_NAME")!.GetFormattedText();
+            fallbackTitle = LocString.GetIfExists("settings_ui", "BASELIB-UNKNOWN_MOD_NAME")
+                ?.GetFormattedText() ?? "Unknown mod name";
 
         return fallbackTitle;
     }

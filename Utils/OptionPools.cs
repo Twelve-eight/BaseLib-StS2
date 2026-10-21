@@ -72,6 +72,18 @@ public class OptionPools
             throw new InvalidOperationException(
                 $"Ancient '{ancient.Id}' has fewer eligible options than the 3 it must present " +
                 $"(after filtering by RelicCanSpawnAtCustomAncient). Add more options or loosen the filter.");
+
+        // A non-empty pool can still be unrollable: WeightedList.GetRandom calls rng.NextInt(0) when
+        // every weight is 0 and then throws "Roll 0 failed to get a value in list of total weight 0",
+        // a message that never names the ancient. Zero weight is a legal declaration but such an
+        // option can never be selected, so this is an authoring error and must name the ancient the
+        // same way the empty-pool case above does. Sum in long so the check cannot overflow itself.
+        var totalWeight = pool.Sum(option => (long)option.Weight);
+        if (totalWeight <= 0)
+            throw new InvalidOperationException(
+                $"Ancient '{ancient.Id}' has {pool.Count} eligible option(s) with a total weight of " +
+                $"{totalWeight}; at least one of them must weigh more than 0 before it can be rolled.");
+
         return pool.GetRandom(rng, true);
     }
 }
