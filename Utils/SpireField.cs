@@ -474,7 +474,7 @@ public class SavedSpireField<TKey, TVal> : SpireField<TKey, TVal>, ISavedSpireFi
 
         if (typeof(T) == typeof(int) || typeof(T).IsEnum)
         {
-            var found = props.ints?.FirstOrDefault(p => p.name == name);
+            var found = props.ints?.Where(p => p.name == name).Cast<SavedProperties.SavedProperty<int>?>().FirstOrDefault();
             if (found == null) return false;
             
             value = typeof(T).IsEnum
@@ -484,7 +484,7 @@ public class SavedSpireField<TKey, TVal> : SpireField<TKey, TVal>, ISavedSpireFi
         }
         else if (typeof(T) == typeof(bool))
         {
-            var found = props.bools?.FirstOrDefault(p => p.name == name);
+            var found = props.bools?.Where(p => p.name == name).Cast<SavedProperties.SavedProperty<bool>?>().FirstOrDefault();
             if (found == null) return false;
             
             value = (T)(object)found.Value.value;
@@ -492,7 +492,7 @@ public class SavedSpireField<TKey, TVal> : SpireField<TKey, TVal>, ISavedSpireFi
         }
         else if (typeof(T) == typeof(string))
         {
-            var found = props.strings?.FirstOrDefault(p => p.name == name);
+            var found = props.strings?.Where(p => p.name == name).Cast<SavedProperties.SavedProperty<string>?>().FirstOrDefault();
             if (found == null) return false;
             
             value = (T)(object)found.Value.value;
@@ -500,7 +500,7 @@ public class SavedSpireField<TKey, TVal> : SpireField<TKey, TVal>, ISavedSpireFi
         }
         else if (typeof(T) == typeof(ModelId))
         {
-            var found = props.modelIds?.FirstOrDefault(p => p.name == name);
+            var found = props.modelIds?.Where(p => p.name == name).Cast<SavedProperties.SavedProperty<ModelId>?>().FirstOrDefault();
             if (found == null) return false;
             
             value = (T)(object)found.Value.value;
@@ -511,8 +511,8 @@ public class SavedSpireField<TKey, TVal> : SpireField<TKey, TVal>, ISavedSpireFi
             || (typeof(T).IsArray && typeof(T).GetElementType()!.IsEnum)
         )
         {
-            var found = props.intArrays?.FirstOrDefault(p => p.name == name);
-            if (found == null) return false;
+            var found = props.intArrays?.Where(p => p.name == name).Cast<SavedProperties.SavedProperty<int[]>?>().FirstOrDefault();
+            if (found == null || found.Value.value == null) return false;
             
             if (typeof(T).IsArray && typeof(T).GetElementType()!.IsEnum)
             {
@@ -530,7 +530,7 @@ public class SavedSpireField<TKey, TVal> : SpireField<TKey, TVal>, ISavedSpireFi
         }
         else if (typeof(T) == typeof(SerializableCard))
         {
-            var found = props.cards?.FirstOrDefault(p => p.name == name);
+            var found = props.cards?.Where(p => p.name == name).Cast<SavedProperties.SavedProperty<SerializableCard>?>().FirstOrDefault();
             if (found == null) return false;
             
             value = (T)(object)found.Value.value;
@@ -541,8 +541,8 @@ public class SavedSpireField<TKey, TVal> : SpireField<TKey, TVal>, ISavedSpireFi
             || typeof(T) == typeof(List<SerializableCard>)
         )
         {
-            var found = props.cardArrays?.FirstOrDefault(p => p.name == name);
-            if (found == null) return false;
+            var found = props.cardArrays?.Where(p => p.name == name).Cast<SavedProperties.SavedProperty<SerializableCard[]>?>().FirstOrDefault();
+            if (found == null || found.Value.value == null) return false;
             
             value =
                 typeof(T) == typeof(List<SerializableCard>)
