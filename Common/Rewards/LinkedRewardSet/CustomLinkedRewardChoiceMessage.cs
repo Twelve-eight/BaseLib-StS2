@@ -13,9 +13,13 @@ namespace BaseLib.Common.Rewards.LinkedRewardSet;
 /// Broadcasts which reward of a <see cref="CustomLinkedRewardSet"/> a player picked, so every other client can replay
 /// that pick on its own copy of the same reward set.
 /// <br/><br/>
-/// Both ends must run the same BaseLib version: a custom message's id is derived from the order of the
-/// <see cref="ICustomMessage"/> implementations (see <see cref="CustomMessageWrapper"/>), so a version that adds or
-/// reorders messages routes this one to the wrong type.
+/// Both ends must agree on two ids. The outer one is <see cref="CustomMessageWrapper.WrapperMessageId"/>, a free
+/// byte slot picked from the game's registered <c>INetMessage</c> table by <c>AdjustCustomMessageKeys</c>; it depends
+/// on how many message types the game and installed mods register, not on <see cref="ICustomMessage"/> order. The
+/// inner id is <c>(FullName ?? Name).ComputeBasicHash()</c>, an MD5-FNV hash written as a 32 bit int, so it is bound
+/// to this type's full name and unaffected by registration or implementation order (a rare 32 bit collision is
+/// resolved by deterministic probing over the name-sorted types). Only a change to the wire format or to one of
+/// those id mappings breaks interoperability; adding or reordering custom messages does not.
 /// <br/><br/>
 /// Wire format is 48 bit and unchanged since 3.4.5: <see cref="setId"/> takes 32 bit, and each index takes 8 bit
 /// (32 + 8 + 8). That is the width the base game uses for the same kind of index (<c>RewardSelectedMessage</c> sends
