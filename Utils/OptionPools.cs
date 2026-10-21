@@ -42,8 +42,11 @@ public class OptionPools
         WeightedList<AncientOption> rollPool = [..pool.Where(option => option.ModelForOption.RelicCanSpawnAtCustomAncient(ancient))];
 
         // WeightedList.GetRandom throws IndexOutOfRangeException on an empty list, and the filter
-        // above can empty a small pool entirely. Three options are requested unconditionally, so a
-        // pool with fewer than three eligible entries used to fail the ancient mid-run.
+        // above can empty a small pool entirely. This does NOT make an under-provisioned ancient
+        // work: fewer than three eligible options is a mod-authoring error, and there is no
+        // non-arbitrary way to invent the missing ones. What changes is the failure mode — a bare
+        // IndexOutOfRangeException from inside WeightedList becomes a message that names the
+        // ancient and the filter that emptied it.
         result.Add(TakeOrThrow(rollPool, rng, ancient));
 
         if (pool != _pools[1])
