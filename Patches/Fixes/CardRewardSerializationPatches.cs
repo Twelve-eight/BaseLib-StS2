@@ -339,8 +339,28 @@ public static class RewardFromSerializableExtPatch
         }
 
         var pools = save.CardPoolIds
-            .Select(ModelDb.GetById<CardPoolModel>)
+            .Select(id => id == null ? null : ModelDb.GetByIdOrNull<CardPoolModel>(id))
+            .Where(p => p != null)
+            .Select(p => p!)
             .ToList();
+
+        if (pools.Count < save.CardPoolIds.Count)
+        {
+            BaseLibMain.Logger.Warn(
+                $"Reward.FromSerializable: {save.CardPoolIds.Count - pools.Count} of {save.CardPoolIds.Count} " +
+                "saved card pool(s) are not loaded (mod removed?) - using the rest.");
+        }
+
+        if (pools.Count == 0)
+        {
+            // CardCreationOptions with no pools makes CardFactory.CreateForReward throw once the reward is
+            // populated (RollForRarity has no rarity to pick), so hand the reward the player's own pool
+            // instead of one that crashes when opened.
+            BaseLibMain.Logger.Warn(
+                $"Reward.FromSerializable: no saved card pool could be resolved, falling back to {player.Character.CardPool.Id}");
+            pools.Add(player.Character.CardPool);
+        }
+
         var poolOptions = new CardCreationOptions(pools, save.Source, save.RarityOdds);
         if (flags != 0)
             poolOptions.WithFlags(flags);
