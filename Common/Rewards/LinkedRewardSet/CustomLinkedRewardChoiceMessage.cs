@@ -14,8 +14,13 @@ namespace BaseLib.Common.Rewards.LinkedRewardSet;
 /// that pick on its own copy of the same reward set.
 /// <br/><br/>
 /// Both ends must run the same BaseLib version: a custom message's id is derived from the order of the
-/// <see cref="ICustomMessage"/> implementations (see <see cref="CustomMessageWrapper"/>), and this message's wire
-/// format changed with this version, so mixed versions do not interoperate.
+/// <see cref="ICustomMessage"/> implementations (see <see cref="CustomMessageWrapper"/>), so a version that adds or
+/// reorders messages routes this one to the wrong type.
+/// <br/><br/>
+/// Wire format is 48 bit and unchanged since 3.4.5: <see cref="setId"/> takes 32 bit, and each index takes 8 bit
+/// (32 + 8 + 8). That is the width the base game uses for the same kind of index (<c>RewardSelectedMessage</c> sends
+/// its <c>rewardIndex</c> as 8 bit): an index addresses one reward inside a single reward set, which holds a handful
+/// of entries, and <see cref="TryApplyChoice"/> bounds-checks both indices against the actual lists.
 /// </summary>
 public class CustomLinkedRewardChoiceMessage : ICustomMessage
 {
@@ -28,15 +33,15 @@ public class CustomLinkedRewardChoiceMessage : ICustomMessage
     public void Serialize(PacketWriter writer)
     {
         writer.WriteInt(setId);
-        writer.WriteInt(containerIndex);
-        writer.WriteInt(nestedIndex);
+        writer.WriteInt(containerIndex, 8);
+        writer.WriteInt(nestedIndex, 8);
     }
 
     public void Deserialize(PacketReader reader)
     {
         setId = reader.ReadInt();
-        containerIndex = reader.ReadInt();
-        nestedIndex = reader.ReadInt();
+        containerIndex = reader.ReadInt(8);
+        nestedIndex = reader.ReadInt(8);
     }
 
     public void HandleMessage(ulong senderId) => TryApplyChoice(senderId, true);
