@@ -468,6 +468,17 @@ public class SavedSpireField<TKey, TVal> : SpireField<TKey, TVal>, ISavedSpireFi
         }
     }
 
+    /// <summary>
+    /// Reads a saved value by name.
+    /// </summary>
+    /// <remarks>
+    /// <c>SavedProperty&lt;T&gt;</c> is a struct, so <c>props.ints?.FirstOrDefault(...)</c> is a
+    /// <c>Nullable&lt;SavedProperty&lt;T&gt;&gt;</c> that is null ONLY when the whole list is absent
+    /// from the save. When the list exists but has no entry with this name, FirstOrDefault returns
+    /// <c>default</c>, which lifts to a <em>non-null</em> nullable - so a missing entry used to be
+    /// reported as "present with default values". Every branch therefore also checks
+    /// <c>name == null</c>, which can only happen for the struct default.
+    /// </remarks>
     private static bool TryGetFromProperties<T>(SavedProperties props, string name, out T? value)
     {
         value = default;
@@ -475,7 +486,7 @@ public class SavedSpireField<TKey, TVal> : SpireField<TKey, TVal>, ISavedSpireFi
         if (typeof(T) == typeof(int) || typeof(T).IsEnum)
         {
             var found = props.ints?.FirstOrDefault(p => p.name == name);
-            if (found == null) return false;
+            if (found == null || found.Value.name == null) return false; // struct default == not found
             
             value = typeof(T).IsEnum
                 ? (T)Enum.ToObject(typeof(T), found.Value.value)
@@ -485,7 +496,7 @@ public class SavedSpireField<TKey, TVal> : SpireField<TKey, TVal>, ISavedSpireFi
         else if (typeof(T) == typeof(bool))
         {
             var found = props.bools?.FirstOrDefault(p => p.name == name);
-            if (found == null) return false;
+            if (found == null || found.Value.name == null) return false; // struct default == not found
             
             value = (T)(object)found.Value.value;
             return true;
@@ -493,7 +504,7 @@ public class SavedSpireField<TKey, TVal> : SpireField<TKey, TVal>, ISavedSpireFi
         else if (typeof(T) == typeof(string))
         {
             var found = props.strings?.FirstOrDefault(p => p.name == name);
-            if (found == null) return false;
+            if (found == null || found.Value.name == null) return false; // struct default == not found
             
             value = (T)(object)found.Value.value;
             return true;
@@ -501,7 +512,7 @@ public class SavedSpireField<TKey, TVal> : SpireField<TKey, TVal>, ISavedSpireFi
         else if (typeof(T) == typeof(ModelId))
         {
             var found = props.modelIds?.FirstOrDefault(p => p.name == name);
-            if (found == null) return false;
+            if (found == null || found.Value.name == null) return false; // struct default == not found
             
             value = (T)(object)found.Value.value;
             return true;
@@ -512,7 +523,7 @@ public class SavedSpireField<TKey, TVal> : SpireField<TKey, TVal>, ISavedSpireFi
         )
         {
             var found = props.intArrays?.FirstOrDefault(p => p.name == name);
-            if (found == null) return false;
+            if (found == null || found.Value.name == null) return false; // struct default == not found
             
             if (typeof(T).IsArray && typeof(T).GetElementType()!.IsEnum)
             {
@@ -531,7 +542,7 @@ public class SavedSpireField<TKey, TVal> : SpireField<TKey, TVal>, ISavedSpireFi
         else if (typeof(T) == typeof(SerializableCard))
         {
             var found = props.cards?.FirstOrDefault(p => p.name == name);
-            if (found == null) return false;
+            if (found == null || found.Value.name == null) return false; // struct default == not found
             
             value = (T)(object)found.Value.value;
             return true;
@@ -542,7 +553,7 @@ public class SavedSpireField<TKey, TVal> : SpireField<TKey, TVal>, ISavedSpireFi
         )
         {
             var found = props.cardArrays?.FirstOrDefault(p => p.name == name);
-            if (found == null) return false;
+            if (found == null || found.Value.name == null) return false; // struct default == not found
             
             value =
                 typeof(T) == typeof(List<SerializableCard>)

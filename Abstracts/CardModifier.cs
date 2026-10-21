@@ -89,7 +89,7 @@ public abstract class CardModifier : AbstractModel, IComparable<CardModifier>
     
     private static void LoadModifierSaves(CardModel card, List<ModifierSave>? modifiers)
     {
-        _modifiers[card] = modifiers?.Select(mod => mod.ToRealMod(card)).ToList() ?? [];
+        _modifiers[card] = modifiers?.Select(mod => mod.ToRealMod(card)).OfType<CardModifier>().ToList() ?? [];
     }
 
     public sealed class ModifierSave : IPacketSerializable
@@ -105,9 +105,19 @@ public abstract class CardModifier : AbstractModel, IComparable<CardModifier>
             return save;
         }
 
-        public CardModifier ToRealMod(CardModel owner)
+        public CardModifier? ToRealMod(CardModel owner)
         {
-            var mod = (CardModifier) ModelDb.GetById<CardModifier>(Id!).MutableClone();
+            // GetById throws ModelNotFoundException when the id belongs to a mod the player has
+            // since removed, which would abort the whole save load. The engine's own save paths
+            // degrade instead (SaveUtil.*OrDeprecated); do the same and drop just this modifier.
+            var proto = ModelDb.GetByIdOrNull<CardModifier>(Id!);
+            if (proto == null)
+            {
+                BaseLibMain.Logger.Warn($"Dropping card modifier '{Id}' - no such model is loaded (mod removed?)");
+                return null;
+            }
+
+            var mod = (CardModifier)proto.MutableClone();
             mod.Owner = owner;
             mod.Amount = Amount;
             mod.LoadSaveData(this);

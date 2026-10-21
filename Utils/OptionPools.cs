@@ -37,26 +37,38 @@ public class OptionPools
     public List<AncientOption> Roll(Rng rng, AncientEventModel ancient)
     {
         List<AncientOption> result = [];
-        
+
         var pool = _pools[0];
         WeightedList<AncientOption> rollPool = [..pool.Where(option => option.ModelForOption.RelicCanSpawnAtCustomAncient(ancient))];
-        
-        result.Add(rollPool.GetRandom(rng, true));
+
+        // WeightedList.GetRandom throws IndexOutOfRangeException on an empty list, and the filter
+        // above can empty a small pool entirely. Three options are requested unconditionally, so a
+        // pool with fewer than three eligible entries used to fail the ancient mid-run.
+        result.Add(TakeOrThrow(rollPool, rng, ancient));
 
         if (pool != _pools[1])
         {
             pool = _pools[1];
             rollPool = [..pool.Where(option => option.ModelForOption.RelicCanSpawnAtCustomAncient(ancient))];
         }
-        result.Add(rollPool.GetRandom(rng, true));
+        result.Add(TakeOrThrow(rollPool, rng, ancient));
 
         if (pool != _pools[2])
         {
             pool = _pools[2];
             rollPool = [..pool.Where(option => option.ModelForOption.RelicCanSpawnAtCustomAncient(ancient))];
         }
-        result.Add(rollPool.GetRandom(rng, true));
+        result.Add(TakeOrThrow(rollPool, rng, ancient));
 
         return result;
+    }
+
+    private static AncientOption TakeOrThrow(WeightedList<AncientOption> pool, Rng rng, AncientEventModel ancient)
+    {
+        if (pool.Count == 0)
+            throw new InvalidOperationException(
+                $"Ancient '{ancient.Id}' has fewer eligible options than the 3 it must present " +
+                $"(after filtering by RelicCanSpawnAtCustomAncient). Add more options or loosen the filter.");
+        return pool.GetRandom(rng, true);
     }
 }

@@ -338,14 +338,27 @@ public partial class NModConfigSubmenu : NSubmenu
 
     private static string GetModTitle(ModConfig config)
     {
-        var locKey = $"{config.ModPrefix[..^1]}.mod_title";
-        var locStr = LocString.GetIfExists("settings_ui", locKey);
-        if (locStr != null)
-            return locStr.GetFormattedText();
+        // ModPrefix is "" for a config class declared in the global namespace (TypePrefix.GetPrefix
+        // returns empty when Namespace is null), which ModConfig explicitly supports as long as the
+        // constructor passed an explicit filename. Slicing [..^1] on "" threw ArgumentOutOfRange and
+        // took down the whole mod-config screen, including its own error path.
+        var prefix = config.ModPrefix;
+        if (prefix.Length > 0 && prefix[^1] == TypePrefix.PrefixSplitChar)
+            prefix = prefix[..^1];
 
-        ModConfig.ModConfigLogger.Warn($"No {locKey} found in localization table, using fallback title");
+        if (prefix.Length > 0)
+        {
+            var locKey = $"{prefix}.mod_title";
+            var locStr = LocString.GetIfExists("settings_ui", locKey);
+            if (locStr != null)
+                return locStr.GetFormattedText();
+
+            ModConfig.ModConfigLogger.Warn($"No {locKey} found in localization table, using fallback title");
+        }
 
         var fallbackTitle = config.GetType().GetRootNamespace();
+        if (string.IsNullOrWhiteSpace(fallbackTitle))
+            fallbackTitle = config.GetType().Assembly.GetName().Name;
         if (string.IsNullOrWhiteSpace(fallbackTitle))
             fallbackTitle = LocString.GetIfExists("settings_ui", "BASELIB-UNKNOWN_MOD_NAME")!.GetFormattedText();
 
