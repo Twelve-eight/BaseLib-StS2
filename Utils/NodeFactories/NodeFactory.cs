@@ -44,6 +44,11 @@ public abstract class NodeFactory
     /// Register a scene path to be auto-converted to the specified node type on Instantiate.
     /// The node type must have a NodeFactory registered for it.
     /// </summary>
+    /// <param name="scenePath">Path of the scene resource. A missing res:// prefix is added automatically.</param>
+    /// <param name="postConversionAction">
+    /// Optional callback invoked once with the converted node, after conversion has finished.
+    /// Exceptions thrown by it are logged and rethrown, same as conversion failures.
+    /// </param>
     public static void RegisterSceneType<TNode>(string scenePath, Action<TNode>? postConversionAction = null) where TNode : Node
     {
         RegisterSceneType(scenePath, (typeof(TNode), postConversionAction));
@@ -53,6 +58,11 @@ public abstract class NodeFactory
     /// Register a scene path to be auto-converted to the specified node type on Instantiate.
     /// Logs a warning if the path was already registered for a different type (silent overwrite).
     /// </summary>
+    /// <param name="scenePath">Path of the scene resource. A missing res:// prefix is added automatically.</param>
+    /// <param name="nodeType">
+    /// Item1 is the type whose factory performs the conversion; Item2 is an optional post-conversion callback
+    /// typed against <typeparamref name="TNode"/>.
+    /// </param>
     public static void RegisterSceneType<TNode>(string scenePath, (Type, Action<TNode>?) nodeType) where TNode : Node
     {
         if (string.IsNullOrWhiteSpace(scenePath))
@@ -72,8 +82,18 @@ public abstract class NodeFactory
         if (_registeredScenes.TryGetValue(scenePath, out var existing) && existing.Item1 != nodeType.Item1)
             BaseLibMain.Logger.Warn($"Overwriting scene registration for '{scenePath}': {existing.Item1.Name} → {nodeType.Item1.Name}");
 
-        _registeredScenes[scenePath] = (nodeType.Item1, nodeType.Item2 as Action<Node>);
-        BaseLibMain.Logger.Info($"Registered scene '{scenePath}' for auto-conversion to {nodeType.Item1.Name}");
+        // Action<in T> is contravariant: Action<Node> converts to Action<TNode>, but Action<TNode> does not convert
+        // to Action<Node>. `nodeType.Item2 as Action<Node>` therefore yielded null for every TNode != Node, silently
+        // dropping the post-conversion callback. Wrap the typed callback in an adapter closure instead.
+        var callback = nodeType.Item2;
+        Action<Node>? postConversion = null;
+        if (callback != null)
+            postConversion = converted => callback((TNode)converted);
+
+        _registeredScenes[scenePath] = (nodeType.Item1, postConversion);
+        BaseLibMain.Logger.Info(postConversion == null
+            ? $"Registered scene '{scenePath}' for auto-conversion to {nodeType.Item1.Name} (no post-conversion callback)"
+            : $"Registered scene '{scenePath}' for auto-conversion to {nodeType.Item1.Name} (post-conversion callback for {typeof(TNode).Name})");
     }
 
     internal static void RegisterFactory(Type nodeType, NodeFactory factory)

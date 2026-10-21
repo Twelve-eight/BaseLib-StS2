@@ -20,6 +20,9 @@ using MegaCrit.Sts2.Core.Nodes.Combat;
 using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
 using MegaCrit.Sts2.Core.Nodes.Screens.Overlays;
 using MegaCrit.Sts2.Core.Runs;
+// CardSelectCmd's Selector/LocalSelector are automated selectors; the CardSelection namespace has a
+// same-named screen interface, so pin the one that owns GetSelectedCards.
+using ICardSelector = MegaCrit.Sts2.Core.TestSupport.ICardSelector;
 
 namespace BaseLib.Commands;
 
@@ -85,6 +88,11 @@ public static class MultiPileCardSelect
     /// <summary>
     /// Opens a card selection screen where a specific number of cards must be selected from an array of cards and returns the selection result. The cards will be displayed with an icon denoting which card pile they currently reside in.
     /// </summary>
+    /// <remarks>
+    /// Follows the same branching as the vanilla card grid selection: an active <see cref="CardSelectCmd.Selector"/> answers
+    /// the selection without reserving a choice id or opening the screen, and <see cref="CardSelectCmd.LocalSelector"/>
+    /// stands in for the local screen. Both are how automated play and tests drive selections.
+    /// </remarks>
     /// <param name="cards">The cards to select from</param>
     /// <param name="pileTypes">Shown cards will be sorted by pile type in the order they appear in this array.</param>
     /// <returns>
@@ -93,13 +101,24 @@ public static class MultiPileCardSelect
     public static async Task<IEnumerable<CardModel>> Select(PlayerChoiceContext context, Player player, CardSelectorPrefs prefs, List<CardModel> cards, PileType[]? pileTypes = null)
     {
         if (CombatManager.Instance.IsEnding || cards.Count == 0) return [];
+        // Branch order mirrors vanilla CardSelectCmd.FromSimpleGrid: an automated selector answers without a choice
+        // id, without announcing a player choice and without opening any screen.
+        ICardSelector? selector = CardSelectCmd.Selector;
         List<CardModel> result;
-        if (!prefs.RequireManualConfirmation && cards.Count <= prefs.MinSelect)
-            result = cards;
-        else {
-            uint choiceId = RunManager.Instance.PlayerChoiceSynchronizer.ReserveChoiceId(player);
+        bool reservedChoice = selector == null;
+        uint choiceId = reservedChoice ? RunManager.Instance.PlayerChoiceSynchronizer.ReserveChoiceId(player) : 0;
+        if (reservedChoice)
             await context.SignalPlayerChoiceBegunCompatibility(player, PlayerChoiceOptions.None);
-            if ((bool)AccessTools.Method(typeof(CardSelectCmd), nameof(CardSelectCmd.ShouldSelectLocalCard)).Invoke(null, [player])!) {
+        if (!prefs.RequireManualConfirmation && cards.Count <= prefs.MinSelect)
+            result = cards.ToList();
+        else if (selector != null)
+            result = [..await selector.GetSelectedCards(cards, prefs.MinSelect, prefs.MaxSelect)];
+        else if ((bool)AccessTools.Method(typeof(CardSelectCmd), nameof(CardSelectCmd.ShouldSelectLocalCard)).Invoke(null, [player])!) {
+            // LocalSelector is the test-only, non-deterministic selector: like vanilla, it only stands in for the local screen.
+            ICardSelector? localSelector = CardSelectCmd.LocalSelector;
+            if (localSelector != null)
+                result = [..await localSelector.GetSelectedCards(cards, prefs.MinSelect, prefs.MaxSelect)];
+            else {
                 NPlayerHand.Instance?.CancelAllCardPlay();
                 NSimpleCardSelectScreen nSimpleCardSelectScreen = NSimpleCardSelectScreen.Create(cards, prefs);
                 //IsMultiPile.Set(nSimpleCardSelectScreen, true);
@@ -112,10 +131,10 @@ public static class MultiPileCardSelect
                 nSimpleCardSelectScreen._grid._cardRows.ForEach(static r => r.ForEach(static n => ClearHolderIndicatorNodes(n)));
                 List<int> indexes = [..result.Select(c => cards.IndexOf(c))];
                 RunManager.Instance.PlayerChoiceSynchronizer.SyncLocalChoice(player, choiceId, PlayerChoiceResult.FromIndexes(indexes));
-            } else
-                result = [..(await RunManager.Instance.PlayerChoiceSynchronizer.WaitForRemoteChoice(player, choiceId)).AsIndexes().Select(i => cards[i])];
-            await context.SignalPlayerChoiceEnded();
-        }
+            }
+        } else
+            result = [..(await RunManager.Instance.PlayerChoiceSynchronizer.WaitForRemoteChoice(player, choiceId)).AsIndexes().Select(i => cards[i])];
+        if (reservedChoice) await context.SignalPlayerChoiceEnded();
         AccessTools.Method(typeof(CardSelectCmd), nameof(CardSelectCmd.LogChoice)).Invoke(null, [player, result]);
         return result;
     }

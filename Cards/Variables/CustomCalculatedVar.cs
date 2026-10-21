@@ -9,7 +9,8 @@ using MegaCrit.Sts2.Core.Models;
 namespace BaseLib.Cards.Variables;
 
 /// <summary>
-/// A calculated var that allows multiple on a single model and works on relics, powers, and potions.
+/// A calculated var that allows multiple on a single model and works on relics, powers, potions, enchantments,
+/// and card modifiers.
 /// Requires two additional vars with the same name ending in "Base" and "Extra".
 /// A CustomCalculatedVar named "Fire" would need "FireBase" and "FireExtra".
 /// WithMultiplier should be called and provide a multiplier calc using the variable's owner's type.
@@ -74,19 +75,32 @@ public class CustomCalculatedVar : CalculatedVar
             //Treated same as normal cards where calculation is disabled out of combat
             case EnchantmentModel enchant:
                 mult = (!CombatManager.Instance.IsInProgress || 
-                        enchant.Card.Owner.Creature.CombatState == null) ? 0 : 
+                        GetEnchantmentCombatState(enchant) == null) ? 0 : 
                     generalCalc?.Invoke(enchant, target) ?? throw new InvalidOperationException(
                     $"{dynVar.GetType().Name} {dynVar.Name} does not have multiplier calc defined for enchantments in {owner.Id}");
                 return baseVar.BaseValue + extraVar.BaseValue * mult;
             case CardModifier modifier:
                 mult = (!CombatManager.Instance.IsInProgress || 
-                        modifier.Owner!.Owner.Creature.CombatState == null) ? 0 : 
+                        modifier.Owner?.Owner?.Creature?.CombatState == null) ? 0 : 
                     generalCalc?.Invoke(modifier, target) ?? throw new InvalidOperationException(
                         $"{dynVar.GetType().Name} {dynVar.Name} does not have multiplier calc defined for card modifiers in {owner.Id}");
                 return baseVar.BaseValue + extraVar.BaseValue * mult;
             default:
                 return dynVar.BaseValue;
         }
+    }
+
+    /// <summary>
+    /// The combat state of the card an enchantment is attached to, or null when there is none.
+    /// Same checks as the <see cref="DynamicVarSource"/> conversion for enchantments: <see cref="EnchantmentModel.Card"/>
+    /// asserts mutability when read, so it may only be touched once the model is known to be mutable, and an
+    /// unattached card (enchant previews) or an ownerless card has no combat state.
+    /// </summary>
+    private static ICombatState? GetEnchantmentCombatState(EnchantmentModel enchant)
+    {
+        return enchant is { IsMutable: true, Card: not null, Card.IsMutable: true, Card.Owner: not null }
+            ? enchant.Card.Owner.Creature.CombatState
+            : null;
     }
     
     /// <summary>
@@ -131,12 +145,28 @@ public class CustomCalculatedVar : CalculatedVar
 
     protected override DynamicVar GetBaseVar()
     {
-        return _owner!.GetDynamicVar($"{Name}Base");
+        return GetOwnerVar($"{Name}Base");
     }
 
     protected override DynamicVar GetExtraVar()
     {
-        return _owner!.GetDynamicVar($"{Name}Extra");
+        return GetOwnerVar($"{Name}Extra");
+    }
+
+    /// <summary>
+    /// Looks up one of this var's companion vars ("...Base"/"...Extra") on the owning model.
+    /// <see cref="ModelExtensions.GetDynamicVar"/> only knows cards, relics and powers, but this var also supports
+    /// enchantments and card modifiers (see <see cref="CalculateCustomVar"/>), which expose the same
+    /// <see cref="DynamicVarSet"/>.
+    /// </summary>
+    private DynamicVar GetOwnerVar(string varKey)
+    {
+        return _owner switch
+        {
+            EnchantmentModel enchant => enchant.DynamicVars[varKey],
+            CardModifier modifier => modifier.DynamicVars[varKey],
+            _ => _owner!.GetDynamicVar(varKey)
+        };
     }
 
     protected override decimal GetBaseValueForIConvertible() => CalculateCustom(null);

@@ -46,8 +46,26 @@ public static class ModifyHealAmountPatches
             ]);
     }
 
+    /// <summary>
+    /// Applies every heal amount modifier to <paramref name="amount"/> for <paramref name="creature"/>.
+    /// A null <paramref name="creature"/> skips the hooks and returns the clamped amount, which is exactly
+    /// what a heal with no listeners produces.
+    /// </summary>
+    /// <param name="amount">Heal amount before modifiers.</param>
+    /// <param name="creature">Creature being healed.</param>
     public static decimal ModifyHeal(decimal amount, Creature creature)
     {
+        //The transpiler calls this before the engine's own `creature == null` check (IL_00a5), so the argument is
+        //not validated by the engine at this point. Vanilla currently dereferences `creature` even earlier
+        //(IL_004c/IL_0064), so a null creature never actually reaches this hook today; the guard keeps the hook
+        //total across engine reordering and direct calls. Returning Math.Max(0m, amount) mirrors
+        //ModifyMultiplicative's final clamp, i.e. the result of a heal that has no IHealAmountModifier listeners.
+        if (creature == null)
+        {
+            BaseLibMain.Logger.Warn("ModifyHeal called with a null creature; heal amount modifiers were skipped.");
+            return Math.Max(0m, amount);
+        }
+
         var combatState = BetaMainCompatibility.Creature_.CombatState.Get(creature);
         var runState = creature.Player?.RunState ?? (combatState == null ? NullRunState.Instance : new CombatStateWrapper(combatState).RunState);
 

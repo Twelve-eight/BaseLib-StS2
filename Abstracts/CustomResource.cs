@@ -383,11 +383,15 @@ public static class CustomResources<T> where T : CustomResource, new()
                 CostField[dest] = original?.Clone(dest);
             });
 
+    // Sentinel for "this resource was not spent on that play". 0 is a valid amount spent
+    // (for example an optional cost that was paid at 0), so it cannot double as the default.
+    private const int NotSpent = -1;
+
     private static SpireField<CardModel, int> LastSpend =>
-        _lastSpend ??= new SpireField<CardModel, int>(() => 0);
+        _lastSpend ??= new SpireField<CardModel, int>(() => NotSpent);
 
     private static SpireField<CardPlay, int> RecordedSpend =>
-        _recordedSpend ??= new SpireField<CardPlay, int>(() => 0);
+        _recordedSpend ??= new SpireField<CardPlay, int>(() => NotSpent);
 
     #region helper methods
     
@@ -410,7 +414,7 @@ public static class CustomResources<T> where T : CustomResource, new()
     private static async Task Spend(CardModel card)
     {
         var cost = Cost(card);
-        LastSpend[card] = 0;
+        LastSpend[card] = NotSpent;
         if (cost == null)
             return;
 
@@ -549,7 +553,9 @@ public static class CustomResources<T> where T : CustomResource, new()
 
     /// <summary>
     /// Retrieves the amount of this resource spent on this card play.
-    /// Default value of -1 if this resource was not spent on this play.
+    /// Returns <c>-1</c> if this resource was not spent on this play: either the card has no cost of this type, or its
+    /// optional cost was not paid. A value of 0 means the resource was spent with a spent amount of 0
+    /// (see <see cref="WasSpent"/>).
     /// </summary>
     public static int AmountSpent(CardPlay play)
     {
@@ -557,7 +563,9 @@ public static class CustomResources<T> where T : CustomResource, new()
     }
 
     /// <summary>
-    /// Checks if the amount of this resource spent on this card play is 0 or more (<seealso cref="AmountSpent"/>)
+    /// Checks whether this resource was spent on this card play (<seealso cref="AmountSpent"/>).
+    /// Paying 0 counts as spent. Returns false when the card has no cost of this type, or when an optional cost was not
+    /// paid.
     /// </summary>
     public static bool WasSpent(CardPlay play)
     {

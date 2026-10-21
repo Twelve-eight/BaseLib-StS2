@@ -1,7 +1,9 @@
 ﻿using Godot;
+using HarmonyLib;
 using MegaCrit.Sts2.Core.Assets;
 using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Nodes.Vfx.Utilities;
+using System.Reflection;
 
 namespace BaseLib.Utils;
 
@@ -9,12 +11,23 @@ namespace BaseLib.Utils;
 /// <summary>
 /// Utility class for defining an <see cref="NVfxParticleSystem"/> in code, representing a set of
 /// one shot particle emitters.
+/// The built system is freed once the longest-lived particle has expired, instead of after the
+/// fixed one second of the vanilla scene.
 /// If using the same visuals repeatedly, it is recommended to define your builder once and call
 /// <see cref="Build"/> to create a new instance when necessary.
 /// </summary>
 public class ParticleSystemBuilder
 {
     private static Dictionary<int, CurveTexture> _curveDictionary = [];
+
+    /// <summary>
+    /// <see cref="NVfxParticleSystem"/> only exposes its self-destruct delay as a private exported
+    /// field, read once in <c>_Ready</c>. It has to be written before the node enters the tree.
+    /// </summary>
+    private static readonly FieldInfo? RootLifetimeField =
+        AccessTools.Field(typeof(NVfxParticleSystem), "_lifetime");
+
+    private static bool _rootLifetimeWarningLogged;
 
     private static CurveTexture GetCurveCached(GodotUtils.CurveBuilder curveBuilder, int width = 128)
     {
@@ -44,12 +57,18 @@ public class ParticleSystemBuilder
             GpuParticles2D emitter = new();
             emitter.Texture = Texture();
             emitter.Amount = Amount;
+            //A single burst that ends on its own after Lifetime seconds, so the root can be freed
+            //as soon as the last particle is gone. OneShot and Lifetime are set before Emitting.
+            emitter.Lifetime = Lifetime;
+            emitter.OneShot = true;
 
             var processMaterial = new ParticleProcessMaterial();
             processMaterial.ParticleFlagDisableZ = true;
             SetupMaterial?.Invoke(processMaterial);
             
             emitter.ProcessMaterial = processMaterial;
+            
+            emitter.Emitting = true;
             
             return emitter;
         }
@@ -62,6 +81,14 @@ public class ParticleSystemBuilder
         return AddParticle(() => PreloadManager.Cache.GetTexture2D(texturePath));
     }
     
+    /// <summary>
+    /// Adds a one shot particle emitter to the system.
+    /// </summary>
+    /// <param name="baseTexture">Produces the emitter's texture; evaluated once per <see cref="Build"/>.</param>
+    /// <param name="particleCount">Number of particles emitted per burst.</param>
+    /// <param name="lifetime">Seconds each particle lives. Also drives when the built
+    /// <see cref="NVfxParticleSystem"/> frees itself: after the longest particle lifetime of the whole builder.</param>
+    /// <param name="setupParticleProcess">Optional callback that configures the emitter's process material.</param>
     public ParticleSystemBuilder AddParticle(Func<Texture2D> baseTexture, int particleCount = 1, float lifetime = 1f,
         Action<ParticleProcessMaterial>? setupParticleProcess = null)
     {
@@ -132,6 +159,40 @@ public class ParticleSystemBuilder
             root.AddChild(particle.Build());
         }
 
+        //NVfxParticleSystem reads _lifetime in _Ready, so it must be written before the root enters
+        //the tree; otherwise the vfx is freed after the vanilla one second and longer particles are
+        //cut off. An empty builder keeps that vanilla default.
+        if (_particles.Count > 0)
+            SetRootLifetime(root, _particles.Max(particle => particle.Lifetime));
+
         return root;
+    }
+
+    private static void SetRootLifetime(NVfxParticleSystem root, float lifetime)
+    {
+        if (RootLifetimeField == null)
+        {
+            WarnRootLifetimeOnce($"NVfxParticleSystem._lifetime was not found; the vfx will be freed after the vanilla " +
+                                 $"1s instead of {lifetime}s, so longer-lived particles may be cut short.");
+            return;
+        }
+
+        try
+        {
+            RootLifetimeField.SetValue(root, lifetime);
+        }
+        catch (Exception e)
+        {
+            //A cosmetic vfx must never break the caller; keep the vanilla self-destruct delay instead.
+            WarnRootLifetimeOnce($"NVfxParticleSystem._lifetime could not be set: {e.Message}. The vfx will be freed " +
+                                 $"after the vanilla 1s instead of {lifetime}s.");
+        }
+    }
+
+    private static void WarnRootLifetimeOnce(string message)
+    {
+        if (_rootLifetimeWarningLogged) return;
+        _rootLifetimeWarningLogged = true;
+        BaseLibMain.Logger.Warn(message);
     }
 }
