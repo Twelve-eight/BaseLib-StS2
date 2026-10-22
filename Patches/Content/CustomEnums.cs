@@ -251,20 +251,39 @@ class GenEnumValues
         List<FieldInfo> customEnumFields = [];
         foreach (var t in modTypes)
         {
-            var fields = t.GetFields().Where(field => Attribute.IsDefined(field, typeof(CustomEnumAttribute)));
+            List<FieldInfo> fields;
+            try
+            {
+                //Materialized so a type whose fields cannot be read is skipped instead of aborting every enum.
+                fields = t.GetFields().Where(field => Attribute.IsDefined(field, typeof(CustomEnumAttribute))).ToList();
+            }
+            catch (Exception e)
+            {
+                LogSetupFailure($"declaring type {t.FullName}", t, e);
+                continue;
+            }
 
             foreach (var field in fields)
             {
-                if (!field.FieldType.IsEnum)
+                try
                 {
-                    throw new Exception(
-                        $"Field {field.DeclaringType?.FullName}.{field.Name} should be an enum type for CustomEnum");
-                }
+                    if (!field.FieldType.IsEnum)
+                    {
+                        throw new Exception(
+                            $"Field {field.DeclaringType?.FullName}.{field.Name} should be an enum type for CustomEnum");
+                    }
 
-                if (!field.IsStatic)
+                    if (!field.IsStatic)
+                    {
+                        throw new Exception(
+                            $"Field {field.DeclaringType?.FullName}.{field.Name} should be static for CustomEnum");
+                    }
+                }
+                catch (Exception e)
                 {
-                    throw new Exception(
-                        $"Field {field.DeclaringType?.FullName}.{field.Name} should be static for CustomEnum");
+                    //A misdeclared field costs only itself, not the generated values of every other mod.
+                    LogSetupFailure($"field {field.DeclaringType?.FullName}.{field.Name}", field.DeclaringType, e);
+                    continue;
                 }
 
                 if (field.DeclaringType == null)
@@ -284,83 +303,116 @@ class GenEnumValues
 
         foreach (var field in customEnumFields)
         {
-            var keywordInfo = field.GetCustomAttribute<CustomEnumAttribute>();
-            var key = CustomEnums.GenerateKey(field);
-            var t = field.DeclaringType;
-            if (t == null) continue;
-            
-            BaseLibMain.Logger.Debug($"Generated value {Convert.ChangeType(key, TypeCode.Int64)} for field {field.Name} of enum {t.FullName}");
-            field.SetValue(null, key);
-
-            if (!CustomEnums.GeneratedCustomEnumEntries.TryGetValue(field.FieldType, out var dict))
-                CustomEnums.GeneratedCustomEnumEntries[field.FieldType] = dict = [];
-            dict.Add((int)key, (t.GetPrefix(), field.Name));
-
-            if (field.FieldType == typeof(CardKeyword))
+            try
             {
-                var keywordId = t.GetPrefix() + (keywordInfo?.Name ?? field.Name).ToUpperInvariant();
-                var poolAttribute = field.GetCustomAttribute<KeywordPropertiesAttribute>();
-                var autoPosition = poolAttribute?.Position ?? AutoKeywordPosition.None;
-
-                switch (autoPosition)
-                {
-                    case AutoKeywordPosition.Before:
-                        AutoKeywordText.AdditionalBeforeKeywords.Add((CardKeyword) key);
-                        break;
-                    case AutoKeywordPosition.After:
-                        AutoKeywordText.AdditionalAfterKeywords.Add((CardKeyword) key);
-                        break;
-                }
-                    
-                CustomKeywords.KeywordIDs.Add((int) key, new(keywordId)
-                {
-                    AutoPosition = autoPosition,
-                    RichKeyword = poolAttribute?.RichKeyword ?? true
-                });
-                continue;
+                GenerateForField(field);
             }
-            
-            //Following code is exclusively for CustomPile
-            if (field.FieldType == typeof(PileType) && t.IsAssignableTo(typeof(CustomPile)))
+            catch (Exception e)
             {
-                var constructor = t.GetConstructor(BindingFlags.Instance | BindingFlags.Public, []) ?? throw new Exception($"CustomPile {t.FullName} with custom PileType does not have an accessible no-parameter constructor");
-
-                var pileType = (PileType?)field.GetValue(null);
-                if (pileType == null) throw new Exception($"Failed to be set up custom PileType in {t.FullName}");
-
-                CustomPiles.RegisterCustomPile((PileType) pileType, () => (CustomPile) constructor.Invoke(null));
-                var dummyPile = (CustomPile)constructor.Invoke(null);
-                if (dummyPile is { IconPath: { } iconPath, Name: { } locName })
-                {
-                    MultiPileCardSelect.RegisterPileIndicator((PileType)pileType, iconPath, locName);
-                }
-            }
-
-            // CustomReward Registration
-            if (field.FieldType == typeof(RewardType) && t.IsAssignableTo(typeof(CustomReward)))
-            {
-                if (t.CreateInstance() is not CustomReward dummyReward)
-                {
-                    BaseLibMain.Logger.Error($"Reward instance creation for type {t} from {t.Assembly} failed during Initialize");
-                    continue;
-                }
-
-                BaseLibMain.Logger.Debug($"Initializing CustomReward inheriting class {dummyReward.GetType()}");
-                var serializable = dummyReward.ToSerializable();
-                if (serializable.RewardType == RewardType.None) // This will cause a crash if loading a saved reward screen with this reward in it
-                {
-                    // MAYBE: Add to analyzer
-                    throw new InvalidOperationException(
-                        $"CustomReward {dummyReward.GetType()}'s RewardType is None, or doesn't set RewardType in it's ToSerializable override");
-                }
-                if (serializable.RewardType is >= RewardType.None and <= RewardType.SpecialCard)
-                {
-                    //Using a basegame type would result in intercepting reward loading of basegame rewards which is unintended for CustomReward
-                    throw new InvalidOperationException(
-                        $"$CustomReward {dummyReward.GetType()}'s RewardType is basegame type {serializable.RewardType} rather than a custom type");
-                }
-                dummyReward.Initialize();
+                //Isolate each field the way HookUtils isolates hook listeners: an exception escaping here would
+                //abort generation for every later enum, leaving it at 0 (often a basegame value).
+                LogSetupFailure($"field {field.DeclaringType?.FullName}.{field.Name}", field.DeclaringType, e);
             }
         }
+    }
+
+    /// <summary>
+    /// Assigns the generated value to a single field marked with <see cref="CustomEnumAttribute" /> and performs
+    /// the additional registration its enum type requires. Exceptions are deliberately left to the caller, which
+    /// logs and skips the field so the remaining custom enums are still generated.
+    /// </summary>
+    private static void GenerateForField(FieldInfo field)
+    {
+        var keywordInfo = field.GetCustomAttribute<CustomEnumAttribute>();
+        var key = CustomEnums.GenerateKey(field);
+        var t = field.DeclaringType;
+        if (t == null) return;
+
+        BaseLibMain.Logger.Debug($"Generated value {Convert.ChangeType(key, TypeCode.Int64)} for field {field.Name} of enum {t.FullName}");
+        field.SetValue(null, key);
+
+        if (!CustomEnums.GeneratedCustomEnumEntries.TryGetValue(field.FieldType, out var dict))
+            CustomEnums.GeneratedCustomEnumEntries[field.FieldType] = dict = [];
+        dict.Add((int)key, (t.GetPrefix(), field.Name));
+
+        if (field.FieldType == typeof(CardKeyword))
+        {
+            var keywordId = t.GetPrefix() + (keywordInfo?.Name ?? field.Name).ToUpperInvariant();
+            var poolAttribute = field.GetCustomAttribute<KeywordPropertiesAttribute>();
+            var autoPosition = poolAttribute?.Position ?? AutoKeywordPosition.None;
+
+            switch (autoPosition)
+            {
+                case AutoKeywordPosition.Before:
+                    AutoKeywordText.AdditionalBeforeKeywords.Add((CardKeyword) key);
+                    break;
+                case AutoKeywordPosition.After:
+                    AutoKeywordText.AdditionalAfterKeywords.Add((CardKeyword) key);
+                    break;
+            }
+                
+            CustomKeywords.KeywordIDs.Add((int) key, new(keywordId)
+            {
+                AutoPosition = autoPosition,
+                RichKeyword = poolAttribute?.RichKeyword ?? true
+            });
+            return;
+        }
+        
+        //Following code is exclusively for CustomPile
+        if (field.FieldType == typeof(PileType) && t.IsAssignableTo(typeof(CustomPile)))
+        {
+            var constructor = t.GetConstructor(BindingFlags.Instance | BindingFlags.Public, []) ?? throw new Exception($"CustomPile {t.FullName} with custom PileType does not have an accessible no-parameter constructor");
+
+            var pileType = (PileType?)field.GetValue(null);
+            if (pileType == null) throw new Exception($"Failed to be set up custom PileType in {t.FullName}");
+
+            CustomPiles.RegisterCustomPile((PileType) pileType, () => (CustomPile) constructor.Invoke(null));
+            var dummyPile = (CustomPile)constructor.Invoke(null);
+            if (dummyPile is { IconPath: { } iconPath, Name: { } locName })
+            {
+                MultiPileCardSelect.RegisterPileIndicator((PileType)pileType, iconPath, locName);
+            }
+        }
+
+        // CustomReward Registration
+        if (field.FieldType == typeof(RewardType) && t.IsAssignableTo(typeof(CustomReward)))
+        {
+            if (t.CreateInstance() is not CustomReward dummyReward)
+            {
+                BaseLibMain.Logger.Error($"Reward instance creation for type {t} from {t.Assembly} failed during Initialize");
+                return;
+            }
+
+            BaseLibMain.Logger.Debug($"Initializing CustomReward inheriting class {dummyReward.GetType()}");
+            var serializable = dummyReward.ToSerializable();
+            if (serializable.RewardType == RewardType.None) // This will cause a crash if loading a saved reward screen with this reward in it
+            {
+                // MAYBE: Add to analyzer
+                throw new InvalidOperationException(
+                    $"CustomReward {dummyReward.GetType()}'s RewardType is None, or doesn't set RewardType in it's ToSerializable override");
+            }
+            if (serializable.RewardType is >= RewardType.None and <= RewardType.SpecialCard)
+            {
+                //Using a basegame type would result in intercepting reward loading of basegame rewards which is unintended for CustomReward
+                throw new InvalidOperationException(
+                    $"$CustomReward {dummyReward.GetType()}'s RewardType is basegame type {serializable.RewardType} rather than a custom type");
+            }
+            dummyReward.Initialize();
+        }
+    }
+
+    /// <summary>
+    /// Reports a custom enum setup failure that was swallowed so generation could continue. Names the failing
+    /// field or type with its assembly so the owning mod is identifiable; the exception itself is never rethrown,
+    /// because an unhandled one would abort every later custom enum.
+    /// </summary>
+    private static void LogSetupFailure(string subject, Type? owner, Exception e)
+    {
+        var assembly = owner?.Assembly.GetName().Name ?? "<unknown assembly>";
+        BaseLibMain.Logger.Error(
+            $"[CustomEnums] Swallowed an exception while setting up custom enum {subject} from assembly '{assembly}'. " +
+            "The remaining custom enums are still generated; the field involved may be left unset (enum value 0) " +
+            $"or only partially registered.\n{e}");
     }
 }

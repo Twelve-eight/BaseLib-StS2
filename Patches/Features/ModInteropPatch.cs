@@ -323,9 +323,10 @@ internal class ModInterop
                 
                 if (targetField.IsStatic)
                 {
+                    //No wrapper to dereference, and a static setter's arg0 is already the value.
                     QuickTranspiler.Insert = [
                         new CodeInstruction(OpCodes.Ldarg_0),
-                        new CodeInstruction(OpCodes.Stfld, targetField)];
+                        new CodeInstruction(OpCodes.Stsfld, targetField)];
                 }
                 else
                 {
@@ -339,9 +340,10 @@ internal class ModInterop
                 
                 if (targetField.IsStatic)
                 {
+                    //Discard the interop property's own value; the target static field replaces it.
                     QuickTranspiler.Insert = [
                         new CodeInstruction(OpCodes.Pop),
-                        new CodeInstruction(OpCodes.Ldfld, targetField)];
+                        new CodeInstruction(OpCodes.Ldsfld, targetField)];
                 }
                 else //Should be in a ClassWrapper.
                 {

@@ -277,6 +277,7 @@ public static class ExtendedSavePatches
         AddContext<PotionModel, SerializablePotion>(harmony);
         AddContext<Reward, SerializableReward>(harmony);
         AddContext<Player, SerializablePlayer>(harmony);
+        AddContext<EnchantmentModel, SerializableEnchantment>(harmony);
         AddContext<IRunState, SerializableRun>(harmony);
     }
 

@@ -91,6 +91,13 @@ static class GetCustomTypes
     [HarmonyPrefix]
     static bool CustomWrapperTypes(int id, ref Type? type, ref bool __result)
     {
+        // An unassigned wrapper id is 0 (byte default), and AdjustCustomMessageKeys only picks
+        // slots from 128 up, so 0 is never a valid wrapper slot. It is a real registered message
+        // though; claiming it here would deserialize that message as a wrapper and throw in
+        // IdToCustomMessage. Fall through so the game's own lookup wins.
+        if (id == 0)
+            return true;
+
         if (id == CustomMessageWrapper.WrapperMessageId)
         {
             type = typeof(CustomMessageWrapper);
