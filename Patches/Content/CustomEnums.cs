@@ -333,7 +333,20 @@ class GenEnumValues
 
         if (!CustomEnums.GeneratedCustomEnumEntries.TryGetValue(field.FieldType, out var dict))
             CustomEnums.GeneratedCustomEnumEntries[field.FieldType] = dict = [];
-        dict.Add((int)key, (t.GetPrefix(), field.Name));
+        //The reverse lookup is keyed by int (see CustomEnums.EnumName), but the generated value keeps the enum's
+        //underlying type: KeyGenerator explicitly supports byte, sbyte, short, ushort, long and ulong, so a boxed
+        //byte thrown at `(int)key` fails to unbox with InvalidCastException and the already generated value would
+        //never be recorded. Convert instead of casting, and report a value that genuinely does not fit an int.
+        try
+        {
+            dict.Add(Convert.ToInt32(key), (t.GetPrefix(), field.Name));
+        }
+        catch (OverflowException)
+        {
+            BaseLibMain.Logger.Warn(
+                $"[CustomEnums] {t.FullName}.{field.Name} generated the value {key}, which does not fit the int-keyed " +
+                "reverse lookup used by CustomEnums.EnumName. The enum value is set, but its name cannot be looked up.");
+        }
 
         if (field.FieldType == typeof(CardKeyword))
         {

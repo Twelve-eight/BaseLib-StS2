@@ -76,11 +76,22 @@ public static class DefaultLoc
                 }
                 
                 if (existingLang.Count == 0) continue;
-                if (existingLang.Contains("eng")) continue;
 
+                //Every mod's English table is merged into the fallback of each other language
+                //(LocManager.LoadTablesFromPath recurses into "eng" and passes that table as the fallback), so an
+                //English copy of this very table already covers the mod's keys and nothing has to be added.
+                //Checked per file rather than per language directory: a mod can ship eng/cards.json and
+                //zhs/powers.json, and then only the table without an English copy needs a fallback.
+                if (existingLang.Contains("eng") &&
+                    ResourceLoader.Exists($"res://{mod.manifest.id}/localization/eng/{file}")) continue;
+
+                //Also per file: take the first preferred language that actually ships this table, not the first one
+                //that merely has a localization directory. Picking by directory alone drops a table that exists only
+                //in a later preferred language, because only the chosen language's path is added below.
                 foreach (var preferredLang in LanguagePreference)
                 {
                     if (!existingLang.Contains(preferredLang)) continue;
+                    if (!ResourceLoader.Exists($"res://{mod.manifest.id}/localization/{preferredLang}/{file}")) continue;
                     
                     defaultLoc = preferredLang;
                     break;
